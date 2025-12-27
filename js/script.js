@@ -48,7 +48,7 @@ const $$ = sel => Array.from(document.querySelectorAll(sel));
 })();
 
 /* ============================================================
-   WEBGL BACKGROUND
+   WEBGL BACKGROUND - OPTIMIZED
 ============================================================ */
 (() => {
   const canvas = $('#bgCanvas');
@@ -58,16 +58,37 @@ const $$ = sel => Array.from(document.querySelectorAll(sel));
   if (!gl) return;
 
   const frag = `#version 300 es
-precision highp float;
+precision mediump float;                // ← lowered from highp
 uniform float t;
 uniform vec2 r;
 in vec2 u;
 out vec4 o;
+
 float n(vec2 p){return fract(sin(dot(p,vec2(1.,300.)))*43758.5453123);}
-float noise(vec2 p){vec2 i=floor(p),f=fract(p);float a=n(i),b=n(i+vec2(1,0)),c=n(i+vec2(0,1)),d=n(i+1.);vec2 v=f*f*(3.-2.*f);return mix(a,b,v.x)+(c-a)*v.y*(1.-v.x)+(d-b)*v.x*v.y;}
-float fbm(vec2 p){float v=0.,a=.4;for(int i=0;i<5;i++){v+=a*noise(p);p*=2.;a*=.4;}return v;}
-void main(){vec2 p=u;p.x*=r.x/r.y;float g=mix(p.y*.6+.1,p.y*1.2+.9,fbm(p));vec2 q=(vec2(p.x,p.y-t*.2)*7.);float ns=fbm(q),ins=fbm(vec2(fbm(q+ns+t)*.9-.5,ns));vec3 c=mix(vec3(.95,.7,.3),vec3(.6,.4,.1),ins+.5);o=vec4(c+vec3(ins-g),1.);}
-`;
+float noise(vec2 p){
+    vec2 i=floor(p),f=fract(p);
+    float a=n(i),b=n(i+vec2(1,0)),c=n(i+vec2(0,1)),d=n(i+1.);
+    vec2 v=f*f*(3.-2.*f);
+    return mix(a,b,v.x)+(c-a)*v.y*(1.-v.x)+(d-b)*v.x*v.y;
+}
+float fbm(vec2 p){
+    float v=0.,a=.5;                    // ← start higher to compensate for fewer octaves
+    for(int i=0;i<4;i++){               // ← 4 octaves instead of 5
+        v+=a*noise(p);
+        p*=2.;
+        a*=.5;                          // ← adjusted decay (0.5 instead of 0.4)
+    }
+    return v;
+}
+void main(){
+    vec2 p=u;
+    p.x*=r.x/r.y;
+    float g=mix(p.y*.6+.1,p.y*1.2+.9,fbm(p));
+    vec2 q=(vec2(p.x,p.y-t*.2)*7.);
+    float ns=fbm(q),ins=fbm(vec2(fbm(q+ns+t)*.9-.5,ns));
+    vec3 c=mix(vec3(.95,.7,.3),vec3(.6,.4,.1),ins+.5);
+    o=vec4(c+vec3(ins-g),1.);
+}`;
 
   const vert = `#version 300 es
 precision mediump float;
@@ -92,12 +113,17 @@ void main(){u=pos[gl_VertexID];gl_Position=vec4(pos[gl_VertexID],0.,1.);}
   const uniT = gl.getUniformLocation(prog, 't');
   const uniR = gl.getUniformLocation(prog, 'r');
 
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5); // ← cap at 1.5×
+
   const resize = () => {
-    const w = innerWidth;
-    const h = innerHeight;
+    const w = innerWidth * dpr;
+    const h = innerHeight * dpr;
+
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
+      canvas.style.width = innerWidth + 'px';
+      canvas.style.height = innerHeight + 'px';
       gl.viewport(0, 0, w, h);
     }
   };
@@ -106,17 +132,25 @@ void main(){u=pos[gl_VertexID];gl_Position=vec4(pos[gl_VertexID],0.,1.);}
   resize();
 
   const start = performance.now();
+  let lastFrameTime = 0;
 
-  const frame = t => {
-    gl.uniform1f(uniT, (t - start) / 1000);
+  const frame = timestamp => {
+    // Throttle to ~30 fps (33ms per frame) - more than enough for this slow effect
+    if (timestamp - lastFrameTime < 33) {
+      requestAnimationFrame(frame);
+      return;
+    }
+    lastFrameTime = timestamp;
+
+    gl.uniform1f(uniT, (timestamp - start) / 1000);
     gl.uniform2f(uniR, innerWidth, innerHeight);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+
     requestAnimationFrame(frame);
   };
 
   requestAnimationFrame(frame);
 })();
-
 /* ============================================================
    MEDIA PLAYER
 ============================================================ */
